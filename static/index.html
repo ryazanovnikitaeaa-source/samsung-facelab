@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light"><meta name="description" content="Локальная лаборатория распознавания лиц">
+  <title>FaceLab — распознавание лиц</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="FaceLab, главная"><span class="brand-mark">f<span>·</span></span> FaceLab<span class="brand-dot">®</span></a>
+    <div class="side-label">ЛАБОРАТОРИЯ ЛИЦ</div>
+    <nav aria-label="Разделы приложения">
+      <button class="nav-button active" data-tab="recognition" aria-current="page"><span class="nav-icon">⌗</span> Распознавание <span class="nav-arrow">↗</span></button>
+      <button class="nav-button" data-tab="people"><span class="nav-icon">◉</span> База людей <span id="nav-count" class="nav-count">0</span></button>
+      <button class="nav-button" data-tab="evaluation"><span class="nav-icon">▥</span> Проверка качества</button>
+    </nav>
+    <div class="side-card"><div class="small-orb"></div><strong>Только на вашем<br>компьютере.</strong><p>Фотографии обрабатываются локально, без облачных сервисов.</p><span class="side-card-tag">ЛОКАЛЬНО · CPU</span></div>
+    <div class="side-bottom"><span>Учебный проект / AI</span><span>Samsung Innovation Campus</span><div class="side-version">VERSION 1.0 <span>2026</span></div></div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">Лаборатория <span>/</span> <strong id="breadcrumb">Распознавание</strong></div><div class="status-pill" id="model-status"><span class="status-dot"></span><span>Проверяем модели…</span></div></header>
+    <main>
+      <div id="setup-warning" class="notice warning" hidden>Модели ещё не установлены. Запустите <b>setup.bat</b> в папке проекта, дождитесь загрузки и обновите страницу.</div>
+
+      <section id="tab-recognition" class="tab-panel">
+        <div class="section-kicker">01 / РАСПОЗНАВАНИЕ</div>
+        <div class="heading-row"><h1>У каждого лица<br>есть <span class="serif">имя.</span></h1><p class="heading-description">Добавьте знакомых в базу.<br>Загрузите снимок — и найдите их в кадре.</p></div>
+        <div class="recognition-grid">
+          <div class="input-column">
+            <form id="recognize-form" class="panel upload-panel">
+              <div class="panel-top"><h2>Новый снимок</h2><span class="step-tag">ШАГ 01</span></div>
+              <label class="dropzone" id="recognize-drop" for="recognize-file">
+                <input id="recognize-file" name="file" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp" required>
+                <span class="upload-symbol" aria-hidden="true">↥</span><strong>Перетащите фото сюда</strong><span>или <em>выберите на компьютере</em></span><small>JPG, PNG, WEBP, BMP · до 10 МБ</small>
+              </label>
+              <div id="selected-file" class="file-summary" hidden></div>
+              <div class="threshold-block"><div class="label-row"><label for="threshold">Порог узнавания</label><output id="threshold-value" for="threshold">0.363</output></div><input id="threshold" type="range" min="0.2" max="0.8" step="0.001" value="0.363"><div class="range-labels"><span>Больше совпадений</span><span>Строже</span></div><p>Если сходство ниже порога, лицо получит метку «Неизвестный».</p></div>
+              <button id="recognize-button" class="button primary full" type="submit">Распознать лица <span>↗</span></button>
+              <p class="inline-note" id="gallery-note">Добавьте людей в базу, чтобы узнавать их.</p>
+            </form>
+            <details class="how-it-works"><summary>Что происходит с фотографией? <span>+</span></summary><p>Модель находит лица, выравнивает их и вычисляет числовые признаки. Программа сравнивает признаки с эталонами в вашей базе. Исходный снимок обрабатывается в памяти и не сохраняется на сервере.</p><p>Сходство — показатель сравнения, а не вероятность правильного ответа.</p></details>
+          </div>
+          <div class="panel result-panel">
+            <div class="panel-top"><h2>Результат</h2><span id="result-status" class="neutral-tag">ОЖИДАНИЕ СНИМКА</span></div>
+            <div id="result-empty" class="result-empty"><div class="scan-illustration" aria-hidden="true"><div class="scan-corner top-left"></div><div class="scan-corner top-right"></div><div class="scan-corner bottom-left"></div><div class="scan-corner bottom-right"></div><svg viewBox="0 0 220 250"><path d="M110 29C62 29 48 67 52 112c3 35 13 66 34 83 14 11 34 11 48 0 21-17 31-48 34-83 4-45-10-83-58-83Z"/><path d="m53 94 35-19 22 15 22-15 35 19M54 130l33 9 23-49 23 49 33-9M86 195l1-56 23 28 23-28 1 56M87 139h46M83 169l27 16 27-16M88 75l-1 64M132 75l1 64"/><circle cx="88" cy="103" r="4"/><circle cx="132" cy="103" r="4"/><circle cx="110" cy="147" r="3"/></svg><div class="scan-line"></div></div><h3>Готовы увидеть знакомых?</h3><p>Здесь появится фотография<br>с найденными лицами и именами.</p><div class="empty-caption"><span></span> ВЫЧИСЛЕНИЯ НА ВАШЕМ УСТРОЙСТВЕ</div></div>
+            <div id="result-content" hidden><div class="canvas-wrap"><canvas id="result-canvas" aria-label="Фотография с рамками и именами распознанных людей"></canvas></div><div class="result-toolbar"><span id="result-summary"></span><button id="download-image" class="text-button" type="button">Сохранить снимок ↓</button></div><div id="face-list" class="face-list"></div><p id="no-faces" class="inline-note" hidden>Лица не найдены. Попробуйте снимок крупнее и при хорошем освещении.</p></div>
+          </div>
+        </div>
+        <div class="bottom-strip"><span>01 <b>Добавьте людей</b></span><span class="strip-arrow">→</span><span>02 <b>Выберите снимок</b></span><span class="strip-arrow">→</span><span>03 <b>Получите совпадения</b></span><span class="strip-end">ЗНАКОМОЕ ЛИЦО. НОВЫЙ КАДР.</span></div>
+      </section>
+
+      <section id="tab-people" class="tab-panel" hidden>
+        <div class="section-kicker">02 / ВАША КОЛЛЕКЦИЯ</div>
+        <div class="heading-row"><div><h1>Знакомые <span class="serif">лица.</span></h1><p class="section-description">У каждого человека — свои эталонные фотографии.</p></div><button class="button primary" id="open-enroll" type="button">Добавить человека <span>+</span></button></div>
+        <div class="collection-stats"><div><span id="people-count">0</span><small>людей в базе</small></div><div><span id="samples-count">0</span><small>эталонных снимков</small></div><p>Для каждого человека используйте 3–5 разных портретов.<br>Снимки для проверки оставьте отдельно.</p></div>
+        <div id="people-empty" class="panel people-empty"><span class="empty-person">◎</span><h2>Начнём с первого знакомства</h2><p>Добавьте имя и фотографии одного человека.<br>На каждом снимке должно быть только его лицо.</p><button id="empty-enroll" class="button secondary" type="button">Добавить первого человека ↗</button></div>
+        <div id="people-grid" class="people-grid"></div>
+        <div class="notice subtle">В базе хранятся числовые признаки и небольшая миниатюра лица. Добавление и удаление людей сбрасывает текущую проверку качества.</div>
+      </section>
+
+      <section id="tab-evaluation" class="tab-panel" hidden>
+        <div class="section-kicker">03 / ПРОВЕРКА НА НОВЫХ СНИМКАХ</div>
+        <div class="heading-row"><div><h1>Результаты, <span class="serif">а не догадки.</span></h1><p class="section-description">Проверьте узнавание на фотографиях, которых не было в базе.</p></div></div>
+        <div class="evaluation-grid"><form id="evaluate-form" class="panel eval-form"><h2>Добавить тестовые снимки</h2><label class="field-label" for="expected-person">Кто на этих фотографиях?</label><select id="expected-person"><option value="">Неизвестный — человека нет в базе</option></select><label class="dropzone compact" for="evaluate-files"><input id="evaluate-files" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp" multiple required><span class="upload-symbol">↥</span><strong>Выберите новые портреты</strong><small id="eval-files-label">Один человек на снимке · до 20 файлов</small></label><div class="label-row"><label for="eval-threshold">Порог проверки</label><input id="eval-threshold" type="number" min="0.2" max="0.8" step="0.001" value="0.363" required></div><p class="field-help">Добавляйте известного человека или незнакомых людей отдельными партиями. Порог должен быть одинаковым в рамках одной проверки.</p><button id="evaluate-button" class="button primary full" type="submit">Проверить и добавить <span>↗</span></button></form><div class="eval-overview"><div class="metrics-grid"><div class="metric large"><span>Верные ответы</span><strong id="metric-accuracy">—</strong><small id="metric-total">Ещё нет проверенных снимков</small></div><div class="metric"><span>Ложные узнавания</span><strong id="metric-fa">—</strong><small id="metric-fa-help">Среди неизвестных людей</small></div><div class="metric"><span>Ложные отказы</span><strong id="metric-fr">—</strong><small id="metric-fr-help">Среди знакомых людей</small></div><div class="metric"><span>Среднее время</span><strong id="metric-time">—</strong><small>По проверенным снимкам</small></div></div><div class="notice subtle"><b>Честная проверка.</b> Эталоны и точные копии изображений не принимаются. Для итогового теста используйте отдельные снимки после выбора порога. Другой кадр той же серии может завышать результат.</div></div></div>
+        <div class="panel evaluation-table"><div class="panel-top"><h2>История проверки</h2><div class="table-actions"><a class="text-button" href="/api/report.csv" download>CSV ↓</a><button class="text-button" id="download-report" type="button">JSON ↓</button><button class="text-button muted" id="reset-report" type="button">Новая проверка</button></div></div><div class="table-scroll"><table><thead><tr><th>Снимок</th><th>Правильный ответ</th><th>Ответ системы</th><th>Сходство</th><th>Результат</th></tr></thead><tbody id="evaluation-rows"></tbody></table></div><div id="evaluation-empty" class="table-empty">Добавьте тестовые снимки — здесь появятся результаты.</div><div id="evaluation-note" class="table-note"></div></div>
+      </section>
+      <footer class="footer"><span>FaceLab / Локальная лаборатория распознавания</span><span>YuNet + SFace <span class="footer-dot">·</span> OpenCV</span></footer>
+    </main>
+  </div>
+  <dialog id="enroll-dialog"><form id="enroll-form"><div class="dialog-head"><div><div class="section-kicker">НОВОЕ ЗНАКОМСТВО</div><h2>Добавить человека</h2></div><button id="close-enroll" type="button" class="icon-button" aria-label="Закрыть">×</button></div><label class="field-label" for="person-name">Имя или подпись</label><input id="person-name" type="text" maxlength="60" placeholder="Например, Александр" required autocomplete="off"><label class="dropzone compact" for="enroll-files"><input id="enroll-files" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp" multiple required><span class="upload-symbol">↥</span><strong>Выберите фотографии</strong><small id="enroll-files-label">Рекомендуем 3–5 разных портретов · до 10 МБ каждый</small></label><p class="field-help">Одно лицо на каждом снимке. Разные ракурсы и освещение помогут узнавать человека лучше. Добавляйте фотографии с согласия участников.</p><p id="enroll-error" class="form-error" role="alert" hidden></p><button id="enroll-button" class="button primary full" type="submit">Сохранить в базу <span>+</span></button></form></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body></html>
