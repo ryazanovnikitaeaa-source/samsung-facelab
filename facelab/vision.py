@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .detection import detect_faces
 from .matching import normalize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,8 +87,7 @@ class FaceEngine:
         faces = []
         with self._lock:
             self._load()
-            self._detector.setInputSize((image.width,image.height))
-            _, detections = self._detector.detect(bgr)
+            detections = detect_faces(self._detector, bgr)
             if detections is not None:
                 for detection in detections:
                     aligned = self._recognizer.alignCrop(bgr, detection)
