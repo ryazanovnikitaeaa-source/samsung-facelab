@@ -139,3 +139,36 @@ def test_reports_have_ordered_revisions_and_instance_key(service):
     assert second['report_revision'] > first['report_revision']
     assert second['report_instance'] == first['report_instance']
     assert first['report_instance']
+
+
+def test_enrollment_with_explicit_face_choice_stores_selected_reference(service):
+    class SelectableEngine(FakeEngine):
+        def process(self,data,face_index=None):
+            result=super().process(data)
+            result.faces[1].embedding=np.array([0.,1.])
+            result.faces[1].box=(30,30,60,60)
+            if face_index is not None:
+                if not 0 <= face_index < len(result.faces):
+                    raise ValueError('Некорректный выбор лица.')
+                result.faces=[result.faces[face_index]]
+            return result
+
+    service.engine=SelectableEngine()
+    person=service.enroll('Участник', [('group.png',picture((150,150,0)))],face_choices=[1])
+    assert person['samples']==1
+    assert np.allclose(service.store.gallery()[person['id']][0], [0.,1.])
+
+
+@pytest.mark.parametrize('choices', [[], [True], [-1], ['1'], [0,1], {'0':0}])
+def test_invalid_face_choices_do_not_mutate_database(service,choices):
+    with pytest.raises(ValueError, match='выбор'):
+        service.enroll('Участник',[('ref.png',picture((200,0,0)))],face_choices=choices)
+    assert service.store.people()==[]
+
+
+def test_multi_face_preview_has_image_without_registration(service):
+    result=service.inspect([('group.png',picture((150,150,0)))])['files'][0]
+    assert result['face_count']==2
+    assert result['image'].startswith('data:image/jpeg;base64,')
+    assert (result['width'],result['height'])==(120,120)
+    assert service.store.people()==[]

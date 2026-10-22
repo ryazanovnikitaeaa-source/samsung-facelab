@@ -83,30 +83,37 @@ class FaceEngine:
             raise RuntimeError('Не удалось загрузить модели. Повторно запустите setup.bat и перезапустите приложение.') from exc
         self._detector,self._recognizer = detector,recognizer
 
-    def process(self, data):
-        return self._analyze(data, extract_features=True)
+    def process(self, data, face_index=None):
+        return self._analyze(data, extract_features=True, face_index=face_index)
 
     def inspect(self, data):
         """Detection and image quality only; no identity features or matching."""
         return self._analyze(data, extract_features=False)
 
-    def _analyze(self, data, extract_features):
+    def _analyze(self, data, extract_features, face_index=None):
         image, digest = decode_image(data)
         bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
         faces = []
         with self._lock:
             self._load()
             detections = detect_faces(self._detector, bgr)
+            candidates = []
             if detections is not None:
                 for detection in detections:
                     x,y,w,h = [int(v) for v in detection[:4]]
                     x1,y1 = max(0,x),max(0,y)
                     x2,y2 = min(image.width,x+w),min(image.height,y+h)
                     if x2>x1 and y2>y1:
-                        embedding = None
-                        if extract_features:
-                            aligned = self._recognizer.alignCrop(bgr, detection)
-                            embedding = normalize(self._recognizer.feature(aligned).copy())
                         box = (x1,y1,x2-x1,y2-y1)
-                        faces.append(Face(box,embedding,float(detection[-1]),quality_for_face(image,box)))
+                        candidates.append((detection,box))
+            if face_index is not None:
+                if type(face_index) is not int or not 0 <= face_index < len(candidates):
+                    raise ValueError('Некорректный выбор лица. Повторите предварительную проверку снимка.')
+                candidates = [candidates[face_index]]
+            for detection,box in candidates:
+                embedding = None
+                if extract_features:
+                    aligned = self._recognizer.alignCrop(bgr, detection)
+                    embedding = normalize(self._recognizer.feature(aligned).copy())
+                faces.append(Face(box,embedding,float(detection[-1]),quality_for_face(image,box)))
         return Analysis(image,digest,faces)

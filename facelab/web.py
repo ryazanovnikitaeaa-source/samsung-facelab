@@ -1,5 +1,6 @@
 """Local HTTP API and static user interface."""
 import csv
+import json
 from io import StringIO
 import os
 from pathlib import Path
@@ -95,10 +96,18 @@ def create_app(service=None):
         return {'people':service.store.people()}
 
     @app.post('/api/people')
-    async def enroll(name: str=Form(...),files: list[UploadFile]=File(...)):
+    async def enroll(name: str=Form(...),files: list[UploadFile]=File(...),face_choices: str|None=Form(None)):
         from starlette.concurrency import run_in_threadpool
         data=await read_files(files)
-        person=await run_in_threadpool(service.enroll,name,data)
+        choices=None
+        if face_choices is not None:
+            try:
+                choices=json.loads(face_choices)
+            except (ValueError, RecursionError) as exc:
+                raise ValueError('Некорректный выбор лиц. Повторите предварительную проверку снимков.') from exc
+            if not isinstance(choices,list):
+                raise ValueError('Некорректный выбор лиц. Повторите предварительную проверку снимков.')
+        person=await run_in_threadpool(service.enroll,name,data,choices)
         return {'person':person}
 
     @app.get('/api/people/{person_id}/thumbnail')

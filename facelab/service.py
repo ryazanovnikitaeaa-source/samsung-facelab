@@ -29,7 +29,7 @@ class FaceService:
         self._report_revision = 0
         self._report_instance = uuid4().hex
 
-    def enroll(self, name, files):
+    def enroll(self, name, files, face_choices=None):
         name = unicodedata.normalize('NFC',' '.join(name.split()))
         if not 1 <= len(name) <= 60 or any(unicodedata.category(c).startswith('C') for c in name):
             raise ValueError('Укажите имя длиной от 1 до 60 символов без управляющих знаков.')
@@ -37,13 +37,18 @@ class FaceService:
             raise ValueError('Выберите другое имя: «Неизвестный» используется для отказа от узнавания.')
         if not 1 <= len(files) <= 20:
             raise ValueError('Выберите от 1 до 20 фотографий. Для качества рекомендуем 3–5 разных снимков.')
+        if face_choices is None:
+            face_choices = [None] * len(files)
+        if (not isinstance(face_choices,list) or len(face_choices) != len(files) or
+                any(choice is not None and (type(choice) is not int or choice < 0) for choice in face_choices)):
+            raise ValueError('Некорректный выбор лиц. Повторите предварительную проверку снимков.')
         with self.lock:
             if self.store.name_exists(name.casefold()):
                 raise ValueError('Человек с таким именем уже существует. Выберите другое имя.')
             seen = self.store.reference_hashes()
             samples, thumbnail, warnings = [], None, []
-            for filename,data in files:
-                analysis = self.engine.process(data)
+            for (filename,data),choice in zip(files,face_choices):
+                analysis = self.engine.process(data) if choice is None else self.engine.process(data,face_index=choice)
                 if len(analysis.faces) != 1:
                     raise ValueError(f'«{filename}»: для регистрации нужно ровно одно лицо. Найдено: {len(analysis.faces)}.')
                 if analysis.image_hash in seen:
@@ -71,6 +76,8 @@ class FaceService:
         for filename,data in files:
             analysis=self.engine.inspect(data)
             results.append({'filename':filename,'face_count':len(analysis.faces),
+                            'width':analysis.image.width,'height':analysis.image.height,
+                            'image':image_url(analysis.image) if len(analysis.faces)>1 else None,
                             'faces':[{'box':list(face.box),
                                       'quality':face.quality or quality_for_face(analysis.image,face.box)}
                                      for face in analysis.faces]})
@@ -157,6 +164,7 @@ class FaceService:
                     'gallery':{'people':len(people),'samples':sum(person['samples'] for person in people)},
                     'version':__version__,
                     'models':{'detection':'YuNet 2023mar','recognition':'SFace 2021dec'},
-                    'protocol':'Одно лицо на фото; эталоны и повторные изображения исключены по хешу RGB-пикселей. '
+                    'protocol':'Для эталонов — одно обнаруженное или явно выбранное пользователем лицо; для оценки — одно лицо на фото. '
+                               'Эталоны и повторные изображения исключены по хешу RGB-пикселей. '
                                'Кадры одной серии и пересохранённые с потерями копии необходимо исключить вручную. '
                                'Порог настраивается на валидации; итоговый тест должен быть отдельным.'}

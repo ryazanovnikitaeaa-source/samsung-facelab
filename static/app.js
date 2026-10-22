@@ -1,5 +1,6 @@
 'use strict';
 import { drawThresholdChart } from './charts.js';
+import { renderQualityPreview } from './face-selection.js';
 const $ = id => document.getElementById(id);
 let people = [];
 let currentReport = null;
@@ -7,6 +8,8 @@ let toastTimer;
 let recognitionVersion = 0;
 let qualityVersion = 0;
 let reportMutationPending = false;
+let enrollmentPreview = null;
+let faceChoices = [];
 
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -75,6 +78,9 @@ function updateFiles(input) {
     label.textContent = input.files.length ? `Выбрано снимков: ${input.files.length}` : 'Один человек на снимке · до 20 файлов';
     if (input.id === 'enroll-files') {
       qualityVersion += 1;
+      enrollmentPreview = null;
+      faceChoices = [];
+      $('enroll-error').hidden = true;
       $('enroll-quality').hidden = true;
       $('enroll-quality').replaceChildren();
     }
@@ -86,6 +92,7 @@ document.querySelectorAll('input[type=file]').forEach(input => {
   ['dragenter', 'dragover'].forEach(event => zone.addEventListener(event, e => {e.preventDefault(); zone.classList.add('dragging');}));
   ['dragleave', 'drop'].forEach(event => zone.addEventListener(event, e => {e.preventDefault(); zone.classList.remove('dragging');}));
   zone.addEventListener('drop', event => {
+    if (input.disabled) return;
     if (!input.multiple && event.dataTransfer.files.length !== 1) {toast('Выберите одну фотографию.', true); return;}
     input.files = event.dataTransfer.files; updateFiles(input);
   });
@@ -131,40 +138,46 @@ async function refreshPeople() {
 function openEnrollment() { $('enroll-error').hidden = true; $('enroll-dialog').showModal(); }
 $('open-enroll').addEventListener('click', openEnrollment);
 $('empty-enroll').addEventListener('click', openEnrollment);
-$('close-enroll').addEventListener('click', () => $('enroll-dialog').close());
+$('close-enroll').addEventListener('click', () => { if (!$('enroll-button').disabled) $('enroll-dialog').close(); });
 $('enroll-dialog').addEventListener('cancel', event => { if ($('enroll-button').disabled) event.preventDefault(); });
-$('check-quality').addEventListener('click', async () => {
-  await busy($('check-quality'), 'Проверяем качество…', async () => {
+async function inspectEnrollment() {
     validateFiles($('enroll-files'));
     if (!$('enroll-files').files.length) throw new Error('Сначала выберите фотографии.');
     const version = qualityVersion;
     const form = new FormData();
     for (const file of $('enroll-files').files) form.append('files', file);
     const result = await api('/api/quality', {method: 'POST', body: form});
-    if (version !== qualityVersion) return;
-    $('enroll-quality').replaceChildren();
-    for (const file of result.files) {
-      const item = document.createElement('div'); item.className = 'quality-item';
-      const title = document.createElement('strong'); title.textContent = file.filename; item.append(title);
-      const messages = file.face_count !== 1
-        ? [`Найдено лиц: ${file.face_count}. Для регистрации нужен одиночный портрет.`]
-        : file.faces[0].quality.issues.map(issue => issue.message);
-      if (messages.length) item.classList.add('warning');
-      for (const message of messages.length ? messages : ['Замечаний к размеру, резкости и освещению нет.']) {
-        const paragraph = document.createElement('p'); paragraph.textContent = message; item.append(paragraph);
-      }
-      $('enroll-quality').append(item);
-    }
-    $('enroll-quality').hidden = false;
-  });
+    if (version !== qualityVersion) return false;
+    enrollmentPreview = result.files;
+    faceChoices = result.files.map(() => null);
+    renderQualityPreview($('enroll-quality'), result.files, faceChoices, () => { $('enroll-error').hidden = true; });
+    return true;
+}
+$('check-quality').addEventListener('click', async () => {
+  if ($('enroll-button').disabled) return;
+  $('enroll-button').disabled = true;
+  try { await busy($('check-quality'), 'Проверяем качество…', inspectEnrollment); }
+  finally { $('enroll-button').disabled = false; }
 });
 $('enroll-form').addEventListener('submit', async event => {
   event.preventDefault(); $('enroll-error').hidden = true;
+  if ($('enroll-button').disabled) return;
   await busy($('enroll-button'), 'Обрабатываем фотографии…', async () => {
     validateFiles($('enroll-files'));
+    if (!enrollmentPreview && !await inspectEnrollment()) return;
+    const missing = enrollmentPreview.findIndex((file, index) => file.face_count > 1 && faceChoices[index] === null);
+    if (missing !== -1) throw new Error(`«${enrollmentPreview[missing].filename}»: выберите нужное лицо на предпросмотре, затем снова нажмите «Сохранить в базу».`);
+    const empty = enrollmentPreview.find(file => file.face_count === 0);
+    if (empty) throw new Error(`«${empty.filename}»: лиц не найдено. Замените этот снимок.`);
     const form = new FormData(); form.append('name', $('person-name').value);
+    form.append('face_choices', JSON.stringify(faceChoices));
     for (const file of $('enroll-files').files) form.append('files', file);
-    const result = await api('/api/people', {method: 'POST', body: form});
+    const controls = [...$('enroll-form').querySelectorAll('input, button')].filter(control => control.id !== 'enroll-button');
+    const disabledStates = controls.map(control => control.disabled);
+    controls.forEach(control => { control.disabled = true; });
+    let result;
+    try { result = await api('/api/people', {method: 'POST', body: form}); }
+    finally { controls.forEach((control, index) => { control.disabled = disabledStates[index]; }); }
     $('enroll-dialog').close(); $('enroll-form').reset(); updateFiles($('enroll-files'));
     resetRecognition(); await refreshPeople(); await refreshReport();
     const warnings = result.person.quality_warnings || [];

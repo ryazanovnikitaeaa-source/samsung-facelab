@@ -66,3 +66,19 @@ def test_quality_preview_does_not_register_person(tmp_path):
     assert response.json()['files'][0]['face_count']==1
     assert response.json()['files'][0]['faces'][0]['quality']['issues']
     assert c.get('/api/status').json()['people_count']==0
+
+
+def test_enrollment_rejects_malformed_selection_json(tmp_path):
+    c,_=client(tmp_path)
+    for selection in ['broken','{}','[true]','[-1]','[]']:
+        response=c.post('/api/people',data={'name':'Участник','face_choices':selection},
+                        files={'files':('ref.png',picture((200,0,0)),'image/png')})
+        assert response.status_code==400, response.text
+    assert c.get('/api/status').json()['people_count']==0
+
+
+def test_enrollment_accepts_unspecified_single_face_selection(tmp_path):
+    c,_=client(tmp_path)
+    response=c.post('/api/people',data={'name':'Участник','face_choices':'[null]'},
+                    files={'files':('ref.png',picture((200,0,0)),'image/png')})
+    assert response.status_code==200, response.text

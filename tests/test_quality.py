@@ -58,3 +58,36 @@ def test_quality_preview_never_extracts_features():
     assert len(analysis.faces) == 1
     assert analysis.faces[0].embedding is None
     assert analysis.faces[0].quality['issues']
+
+
+def test_selected_face_extracts_only_its_own_features():
+    engine = FaceEngine()
+
+    class Detector:
+        def setInputSize(self, size):
+            pass
+
+        def detect(self, image):
+            return None, np.array([[10,10,40,40,20,20,40,20,30,30,20,40,40,40,.99],
+                                   [65,10,40,40,75,20,95,20,85,30,75,40,95,40,.98]], dtype=np.float32)
+
+    class Recognizer:
+        def __init__(self):
+            self.selected = []
+
+        def alignCrop(self, image, detection):
+            self.selected.append(int(detection[0]))
+            return image
+
+        def feature(self, aligned):
+            return np.array([1.,0.])
+
+    engine._detector, engine._recognizer = Detector(), Recognizer()
+    buffer = BytesIO()
+    Image.new('RGB', (120,120), (130,130,130)).save(buffer, format='PNG')
+    result = engine.process(buffer.getvalue(), face_index=1)
+    assert len(result.faces) == 1 and result.faces[0].box == (65,10,40,40)
+    assert engine._recognizer.selected == [65]
+    with pytest.raises(ValueError, match='выбор'):
+        engine.process(buffer.getvalue(), face_index=2)
+    assert engine._recognizer.selected == [65]
