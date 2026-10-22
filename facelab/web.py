@@ -15,10 +15,12 @@ from .matching import DEFAULT_THRESHOLD
 from .service import FaceService
 from .storage import Store
 from .vision import FaceEngine, MAX_FILE_BYTES, ROOT
+from .reporting import render_report
+from . import __version__
 
 
 def create_app(service=None):
-    app=FastAPI(title='FaceLab',version='1.0.0',docs_url=None,redoc_url=None)
+    app=FastAPI(title='FaceLab',version=__version__,docs_url=None,redoc_url=None)
     service=service or FaceService(Store(Path(os.environ.get('FACELAB_DATA_DIR',ROOT/'data'))/'facelab.sqlite3'),FaceEngine())
     app.state.service=service
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=['127.0.0.1','localhost','testserver'])
@@ -43,7 +45,7 @@ def create_app(service=None):
         response.headers['Cache-Control']='no-store'
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
-        response.headers['Content-Security-Policy']="default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+        response.headers.setdefault('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob:; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'")
         return response
 
     @app.exception_handler(ValueError)
@@ -86,7 +88,7 @@ def create_app(service=None):
         people=service.store.people()
         return {'ready':getattr(service.engine,'ready',True),'people_count':len(people),
                 'samples_count':sum(p['samples'] for p in people),'default_threshold':DEFAULT_THRESHOLD,
-                'models':{'detection':'YuNet','recognition':'SFace'},'version':'1.0.0'}
+                'models':{'detection':'YuNet','recognition':'SFace'},'version':__version__}
 
     @app.get('/api/people')
     def people():
@@ -117,20 +119,31 @@ def create_app(service=None):
         data=(await read_files([file]))[0][1]
         return await run_in_threadpool(service.recognize,data,threshold)
 
-    @app.post('/api/evaluate')
-    async def evaluate(files: list[UploadFile]=File(...),expected_id: str=Form(''),threshold: float=Form(DEFAULT_THRESHOLD)):
+    @app.post('/api/quality')
+    async def inspect_quality(files: list[UploadFile]=File(...)):
         from starlette.concurrency import run_in_threadpool
         data=await read_files(files)
-        return await run_in_threadpool(service.evaluate,data,expected_id or None,threshold)
+        return await run_in_threadpool(service.inspect,data)
+
+    @app.post('/api/evaluate')
+    async def evaluate(files: list[UploadFile]=File(...),expected_id: str=Form(''),threshold: float=Form(DEFAULT_THRESHOLD),purpose: str=Form('test')):
+        from starlette.concurrency import run_in_threadpool
+        data=await read_files(files)
+        return await run_in_threadpool(service.evaluate,data,expected_id or None,threshold,purpose)
 
     @app.get('/api/report')
     def report():
         return service.report()
 
+    @app.get('/api/report.html')
+    def printable_report(author: str=''):
+        return Response(render_report(service.report(),author=author),media_type='text/html',
+                        headers={'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
+
     @app.get('/api/report.csv')
     def report_csv():
         output=StringIO(newline='')
-        columns=['filename','expected_name','predicted_name','correct','similarity','threshold','elapsed_ms']
+        columns=['filename','expected_name','predicted_name','correct','similarity','threshold','elapsed_ms','purpose']
         writer=csv.writer(output)
         writer.writerow(columns)
         for case in service.report()['cases']:

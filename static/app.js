@@ -1,9 +1,12 @@
 'use strict';
+import { drawThresholdChart } from './charts.js';
 const $ = id => document.getElementById(id);
 let people = [];
 let currentReport = null;
 let toastTimer;
 let recognitionVersion = 0;
+let qualityVersion = 0;
+let reportMutationPending = false;
 
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -70,6 +73,11 @@ function updateFiles(input) {
   } else {
     const label = input.id === 'enroll-files' ? $('enroll-files-label') : $('eval-files-label');
     label.textContent = input.files.length ? `Выбрано снимков: ${input.files.length}` : 'Один человек на снимке · до 20 файлов';
+    if (input.id === 'enroll-files') {
+      qualityVersion += 1;
+      $('enroll-quality').hidden = true;
+      $('enroll-quality').replaceChildren();
+    }
   }
 }
 document.querySelectorAll('input[type=file]').forEach(input => {
@@ -125,6 +133,31 @@ $('open-enroll').addEventListener('click', openEnrollment);
 $('empty-enroll').addEventListener('click', openEnrollment);
 $('close-enroll').addEventListener('click', () => $('enroll-dialog').close());
 $('enroll-dialog').addEventListener('cancel', event => { if ($('enroll-button').disabled) event.preventDefault(); });
+$('check-quality').addEventListener('click', async () => {
+  await busy($('check-quality'), 'Проверяем качество…', async () => {
+    validateFiles($('enroll-files'));
+    if (!$('enroll-files').files.length) throw new Error('Сначала выберите фотографии.');
+    const version = qualityVersion;
+    const form = new FormData();
+    for (const file of $('enroll-files').files) form.append('files', file);
+    const result = await api('/api/quality', {method: 'POST', body: form});
+    if (version !== qualityVersion) return;
+    $('enroll-quality').replaceChildren();
+    for (const file of result.files) {
+      const item = document.createElement('div'); item.className = 'quality-item';
+      const title = document.createElement('strong'); title.textContent = file.filename; item.append(title);
+      const messages = file.face_count !== 1
+        ? [`Найдено лиц: ${file.face_count}. Для регистрации нужен одиночный портрет.`]
+        : file.faces[0].quality.issues.map(issue => issue.message);
+      if (messages.length) item.classList.add('warning');
+      for (const message of messages.length ? messages : ['Замечаний к размеру, резкости и освещению нет.']) {
+        const paragraph = document.createElement('p'); paragraph.textContent = message; item.append(paragraph);
+      }
+      $('enroll-quality').append(item);
+    }
+    $('enroll-quality').hidden = false;
+  });
+});
 $('enroll-form').addEventListener('submit', async event => {
   event.preventDefault(); $('enroll-error').hidden = true;
   await busy($('enroll-button'), 'Обрабатываем фотографии…', async () => {
@@ -134,6 +167,10 @@ $('enroll-form').addEventListener('submit', async event => {
     const result = await api('/api/people', {method: 'POST', body: form});
     $('enroll-dialog').close(); $('enroll-form').reset(); updateFiles($('enroll-files'));
     resetRecognition(); await refreshPeople(); await refreshReport();
+    const warnings = result.person.quality_warnings || [];
+    $('enrollment-advice').hidden = !warnings.length;
+    $('enrollment-advice').textContent = warnings.length
+      ? 'Запись сохранена. Рекомендации к эталонам:\n' + warnings.map(entry => `${entry.filename}: ${entry.quality.issues.map(issue => issue.message).join(' ')}`).join('\n') : '';
     toast(`«${result.person.name}» добавлен в базу.`);
   }, message => { $('enroll-error').textContent = message; $('enroll-error').hidden = false; });
 });
@@ -167,6 +204,11 @@ async function drawResult(result, version) {
     const name = document.createElement('span'); name.className = 'face-name'; name.textContent = face.name;
     const score = document.createElement('span'); score.className = 'face-score'; score.textContent = face.similarity === null ? 'База пуста' : `Сходство ${face.similarity.toFixed(3)}`;
     row.append(badge, name, score); $('face-list').append(row);
+    if (face.quality?.issues.length) {
+      const advice = document.createElement('p'); advice.className = 'quality-hint';
+      advice.textContent = `Снимок лица ${index + 1}: ` + face.quality.issues.map(issue => issue.message).join(' ');
+      $('face-list').append(advice);
+    }
   }
   $('no-faces').hidden = result.faces.length > 0;
 }
@@ -196,6 +238,8 @@ $('download-image').addEventListener('click', () => $('result-canvas').toBlob(bl
 
 const percent = value => value === null ? '—' : `${(value * 100).toFixed(1)}%`;
 function renderReport(report) {
+  if (currentReport?.report_instance === report.report_instance &&
+      report.report_revision < currentReport.report_revision) return;
   currentReport = report; const metrics = report.metrics;
   $('metric-accuracy').textContent = percent(metrics.accuracy);
   $('metric-total').textContent = metrics.total ? `${metrics.correct} верных из ${metrics.total} снимков` : 'Ещё нет проверенных снимков';
@@ -213,21 +257,70 @@ function renderReport(report) {
   }
   $('evaluation-note').textContent = metrics.total ? `Порог: ${report.threshold.toFixed(3)} · Ошибок выбора имени: ${metrics.wrong_identity}. При изменении базы проверка сбрасывается.` : '';
   if (report.threshold !== null) $('eval-threshold').value = report.threshold;
+  $('eval-threshold').disabled = metrics.total > 0;
+  $('evaluation-purpose').disabled = metrics.total > 0;
+  if (metrics.total) $('evaluation-purpose').value = report.purpose || 'test';
+  renderCalibration(report.calibration);
 }
+
+function renderCalibration(calibration) {
+  $('calibration-message').textContent = calibration?.reason || 'Добавьте новые валидационные снимки.';
+  $('calibration-content').hidden = !calibration?.available;
+  $('threshold-rows').replaceChildren();
+  if (!calibration?.available) return;
+  const value = calibration.recommended_threshold;
+  $('threshold-recommendation').textContent = value === null ? 'Для рекомендации нужны известные и неизвестные люди.' : `Рекомендуемый порог на валидации: ${value.toFixed(3)}`;
+  $('apply-threshold').hidden = value === null;
+  $('calibration-criterion').textContent = `${calibration.criterion} Случаев: ${calibration.eligible}. Исключено: ${calibration.excluded}.`;
+  for (const point of calibration.points) {
+    const row = document.createElement('tr');
+    [point.threshold.toFixed(3), percent(point.metrics.accuracy), percent(point.metrics.false_accept_rate), percent(point.metrics.false_reject_rate)].forEach(value => {
+      const cell = document.createElement('td'); cell.textContent = value; row.append(cell);
+    });
+    $('threshold-rows').append(row);
+  }
+  drawThresholdChart($('threshold-chart'), calibration);
+}
+
+$('apply-threshold').addEventListener('click', () => {
+  const threshold = currentReport?.calibration?.recommended_threshold;
+  if (threshold === null || threshold === undefined) return;
+  $('threshold').value = threshold;
+  $('threshold-value').value = Number(threshold).toFixed(3);
+  resetRecognition();
+  toast(`Порог ${threshold.toFixed(3)} установлен в «Распознавании». Для итогового теста сохраните отчёт и начните новую проверку с этим порогом.`);
+});
+new ResizeObserver(() => {
+  if (currentReport?.calibration?.available) drawThresholdChart($('threshold-chart'), currentReport.calibration);
+}).observe($('threshold-chart').parentElement);
+$('report-author').addEventListener('input', () => {
+  const url = new URL('/api/report.html', location.origin);
+  if ($('report-author').value.trim()) url.searchParams.set('author', $('report-author').value.trim());
+  $('open-print-report').href = url.href;
+});
 async function refreshReport() { renderReport(await api('/api/report')); }
 $('evaluate-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (reportMutationPending) return;
+  reportMutationPending = true; $('reset-report').disabled = true;
+  try {
   await busy($('evaluate-button'), 'Проверяем снимки…', async () => {
     validateFiles($('evaluate-files'));
     const form = new FormData(); form.append('expected_id', $('expected-person').value); form.append('threshold', $('eval-threshold').value);
+    form.append('purpose', $('evaluation-purpose').value);
     for (const file of $('evaluate-files').files) form.append('files', file);
     renderReport(await api('/api/evaluate', {method: 'POST', body: form}));
     $('evaluate-files').value = ''; updateFiles($('evaluate-files')); toast('Результаты добавлены к проверке.');
   });
+  } finally { reportMutationPending = false; $('reset-report').disabled = false; }
 });
 $('reset-report').addEventListener('click', async () => {
+  if (reportMutationPending) return;
   if (currentReport?.metrics.total && !confirm('Сбросить текущие результаты? При необходимости сначала скачайте отчёт.')) return;
+  reportMutationPending = true; $('evaluate-button').disabled = true;
+  try {
   await busy($('reset-report'), 'Сбрасываем…', async () => { renderReport(await api('/api/report', {method: 'DELETE'})); toast('Можно начать новую проверку.'); });
+  } finally { reportMutationPending = false; $('evaluate-button').disabled = false; }
 });
 $('download-report').addEventListener('click', async () => {
   try { const report = await api('/api/report'); downloadBlob(new Blob([JSON.stringify(report, null, 2)], {type: 'application/json'}), 'facelab-evaluation.json'); }

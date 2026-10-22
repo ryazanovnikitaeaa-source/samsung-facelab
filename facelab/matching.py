@@ -25,9 +25,9 @@ def identify(vector, gallery, threshold=DEFAULT_THRESHOLD):
             if score > best_score:
                 best_id, best_score = person_id, score
     if best_id is None:
-        return {'person_id': None, 'similarity': None}
+        return {'person_id': None, 'candidate_id': None, 'similarity': None}
     return {'person_id': best_id if best_score >= threshold else None,
-            'similarity': best_score}
+            'candidate_id': best_id, 'similarity': best_score}
 
 
 def summarize(cases):

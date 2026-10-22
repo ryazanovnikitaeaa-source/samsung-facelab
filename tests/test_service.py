@@ -16,6 +16,12 @@ def picture(color):
 
 
 class FakeEngine:
+    def inspect(self, data):
+        analysis = self.process(data)
+        for face in analysis.faces:
+            face.embedding = None
+        return analysis
+
     def process(self, data):
         image, digest = decode_image(data)
         color = image.getpixel((0, 0))
@@ -95,3 +101,41 @@ def test_identical_pixels_different_encoding_have_same_digest():
     image=Image.open(BytesIO(data))
     buf=BytesIO(); image.save(buf,format='BMP')
     assert decode_image(data)[1] == decode_image(buf.getvalue())[1]
+
+
+def test_validation_records_candidate_and_quality_without_mixing_purposes(service):
+    person = enroll(service)
+    report = service.evaluate([('new.png', picture((180,0,0)))], person['id'], .5, purpose='validation')
+    assert report['purpose'] == 'validation'
+    assert report['cases'][0]['candidate_id'] == person['id']
+    assert 'quality' in report['cases'][0]
+    assert report['calibration']['available']
+    with pytest.raises(ValueError, match='режим'):
+        service.evaluate([('other.png',picture((170,0,0)))], person['id'], .5, purpose='test')
+    assert service.report()['metrics']['total'] == 1
+
+
+def test_quality_warnings_do_not_block_valid_enrollment(service):
+    person = enroll(service)
+    assert person['quality_warnings']
+    assert service.store.people()[0]['id'] == person['id']
+
+
+def test_small_detected_face_warns_but_does_not_block_registration(service):
+    class SmallFaceEngine(FakeEngine):
+        def process(self,data):
+            result=super().process(data)
+            result.faces[0].box=(10,10,40,40)
+            return result
+
+    service.engine=SmallFaceEngine()
+    person=enroll(service)
+    assert any(issue['code']=='small' for entry in person['quality_warnings'] for issue in entry['quality']['issues'])
+
+
+def test_reports_have_ordered_revisions_and_instance_key(service):
+    first=service.report()
+    second=service.report()
+    assert second['report_revision'] > first['report_revision']
+    assert second['report_instance'] == first['report_instance']
+    assert first['report_instance']

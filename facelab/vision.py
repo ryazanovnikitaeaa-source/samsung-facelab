@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .detection import detect_faces
 from .matching import normalize
+from .quality import quality_for_face
 
 ROOT = Path(__file__).resolve().parents[1]
 DETECTOR = 'face_detection_yunet_2023mar.onnx'
@@ -23,8 +24,9 @@ MAX_PIXELS = 20_000_000
 @dataclass
 class Face:
     box: tuple
-    embedding: np.ndarray
+    embedding: np.ndarray | None
     detector_score: float
+    quality: dict | None = None
 
 
 @dataclass
@@ -82,6 +84,13 @@ class FaceEngine:
         self._detector,self._recognizer = detector,recognizer
 
     def process(self, data):
+        return self._analyze(data, extract_features=True)
+
+    def inspect(self, data):
+        """Detection and image quality only; no identity features or matching."""
+        return self._analyze(data, extract_features=False)
+
+    def _analyze(self, data, extract_features):
         image, digest = decode_image(data)
         bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
         faces = []
@@ -90,11 +99,14 @@ class FaceEngine:
             detections = detect_faces(self._detector, bgr)
             if detections is not None:
                 for detection in detections:
-                    aligned = self._recognizer.alignCrop(bgr, detection)
-                    embedding = normalize(self._recognizer.feature(aligned).copy())
                     x,y,w,h = [int(v) for v in detection[:4]]
                     x1,y1 = max(0,x),max(0,y)
                     x2,y2 = min(image.width,x+w),min(image.height,y+h)
                     if x2>x1 and y2>y1:
-                        faces.append(Face((x1,y1,x2-x1,y2-y1),embedding,float(detection[-1])))
+                        embedding = None
+                        if extract_features:
+                            aligned = self._recognizer.alignCrop(bgr, detection)
+                            embedding = normalize(self._recognizer.feature(aligned).copy())
+                        box = (x1,y1,x2-x1,y2-y1)
+                        faces.append(Face(box,embedding,float(detection[-1]),quality_for_face(image,box)))
         return Analysis(image,digest,faces)

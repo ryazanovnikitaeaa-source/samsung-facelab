@@ -5,8 +5,12 @@ from io import BytesIO
 from threading import RLock
 from time import perf_counter
 import unicodedata
+from uuid import uuid4
 
 from .matching import DEFAULT_THRESHOLD, identify, summarize
+from .calibration import compare_thresholds
+from .quality import quality_for_face
+from . import __version__
 
 
 def image_url(image, size=None):
@@ -22,6 +26,8 @@ class FaceService:
     def __init__(self, store, engine):
         self.store, self.engine = store, engine
         self.lock = RLock()
+        self._report_revision = 0
+        self._report_instance = uuid4().hex
 
     def enroll(self, name, files):
         name = unicodedata.normalize('NFC',' '.join(name.split()))
@@ -35,7 +41,7 @@ class FaceService:
             if self.store.name_exists(name.casefold()):
                 raise ValueError('Человек с таким именем уже существует. Выберите другое имя.')
             seen = self.store.reference_hashes()
-            samples, thumbnail = [], None
+            samples, thumbnail, warnings = [], None, []
             for filename,data in files:
                 analysis = self.engine.process(data)
                 if len(analysis.faces) != 1:
@@ -44,9 +50,10 @@ class FaceService:
                     raise ValueError(f'«{filename}»: повтор изображения. Нужны разные снимки, отсутствующие в базе.')
                 seen.add(analysis.image_hash)
                 face=analysis.faces[0]
+                quality=face.quality or quality_for_face(analysis.image,face.box)
+                if quality['issues']:
+                    warnings.append({'filename':filename,'quality':quality})
                 x,y,w,h = face.box
-                if min(w,h) < 48:
-                    raise ValueError(f'«{filename}»: лицо слишком маленькое. Выберите более крупный портрет.')
                 samples.append((analysis.image_hash,face.embedding.tolist()))
                 if thumbnail is None:
                     crop=analysis.image.crop((x,y,x+w,y+h))
@@ -54,7 +61,20 @@ class FaceService:
                     out=BytesIO(); crop.save(out,format='JPEG',quality=85)
                     thumbnail=out.getvalue()
             person=self.store.add(name,name.casefold(),thumbnail,samples)
+            person['quality_warnings']=warnings
             return person
+
+    def inspect(self, files):
+        if not 1 <= len(files) <= 20:
+            raise ValueError('Выберите от 1 до 20 фотографий.')
+        results=[]
+        for filename,data in files:
+            analysis=self.engine.inspect(data)
+            results.append({'filename':filename,'face_count':len(analysis.faces),
+                            'faces':[{'box':list(face.box),
+                                      'quality':face.quality or quality_for_face(analysis.image,face.box)}
+                                     for face in analysis.faces]})
+        return {'files':results,'advisory':True}
 
     def _recognize(self, analysis, threshold):
         gallery=self.store.gallery()
@@ -65,7 +85,8 @@ class FaceService:
         for face in analysis.faces:
             result=identify(face.embedding,gallery,threshold)
             result.update({'name':names.get(result['person_id'],'Неизвестный'),
-                           'box':list(face.box),'detector_score':face.detector_score})
+                           'box':list(face.box),'detector_score':face.detector_score,
+                           'quality':face.quality or quality_for_face(analysis.image,face.box)})
             results.append(result)
         return results
 
@@ -83,7 +104,9 @@ class FaceService:
         with self.lock:
             self.store.delete(person_id)
 
-    def evaluate(self, files, expected_id, threshold=DEFAULT_THRESHOLD):
+    def evaluate(self, files, expected_id, threshold=DEFAULT_THRESHOLD, purpose='test'):
+        if purpose not in {'validation','test'}:
+            raise ValueError('Неизвестный режим проверки.')
         if not 1<=len(files)<=20:
             raise ValueError('Выберите от 1 до 20 тестовых фотографий.')
         with self.lock:
@@ -93,6 +116,8 @@ class FaceService:
             if expected_id is not None and expected_id not in people:
                 raise ValueError('Выбранный человек отсутствует в базе.')
             existing=self.store.evaluations()
+            if existing and existing[0].get('purpose','test') != purpose:
+                raise ValueError('Изменён режим проверки. Сохраните отчёт и начните новую проверку.')
             if existing and abs(existing[0]['threshold']-threshold)>1e-9:
                 raise ValueError('Изменён порог. Сначала начните новую проверку, чтобы не смешивать результаты.')
             seen={c['image_hash'] for c in existing}
@@ -111,6 +136,7 @@ class FaceService:
                 cases.append({'filename':filename,'image_hash':analysis.image_hash,
                               'expected_id':expected_id,'expected_name':people.get(expected_id,'Неизвестный'),
                               'predicted_id':prediction['person_id'],'predicted_name':prediction['name'],
+                              'candidate_id':prediction['candidate_id'],'quality':prediction['quality'],'purpose':purpose,
                               'similarity':prediction['similarity'],'correct':expected_id==prediction['person_id'],
                               'threshold':threshold,'elapsed_ms':round((perf_counter()-start)*1000,1)})
                 seen.add(analysis.image_hash)
@@ -120,8 +146,16 @@ class FaceService:
     def report(self):
         with self.lock:
             cases=self.store.evaluations()
-            return {'generated_at':datetime.now(timezone.utc).isoformat(),'metrics':summarize(cases),
-                    'threshold':cases[0]['threshold'] if cases else None,'cases':cases,
+            purpose=cases[0].get('purpose','test') if cases else 'validation'
+            people=self.store.people()
+            threshold=cases[0]['threshold'] if cases else None
+            self._report_revision += 1
+            return {'report_revision':self._report_revision,'report_instance':self._report_instance,
+                    'generated_at':datetime.now(timezone.utc).isoformat(),'metrics':summarize(cases),
+                    'threshold':threshold,'cases':cases,'purpose':purpose,
+                    'calibration':compare_thresholds(cases,purpose,threshold),
+                    'gallery':{'people':len(people),'samples':sum(person['samples'] for person in people)},
+                    'version':__version__,
                     'models':{'detection':'YuNet 2023mar','recognition':'SFace 2021dec'},
                     'protocol':'Одно лицо на фото; эталоны и повторные изображения исключены по хешу RGB-пикселей. '
                                'Кадры одной серии и пересохранённые с потерями копии необходимо исключить вручную. '

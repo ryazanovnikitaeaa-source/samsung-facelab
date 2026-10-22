@@ -48,3 +48,21 @@ def test_threshold_out_of_range(tmp_path):
     c,_=client(tmp_path)
     r=c.post('/api/recognize',data={'threshold':'2'},files={'file':('a.png',picture((200,0,0)),'image/png')})
     assert r.status_code in [400,422]
+
+
+def test_printable_report_has_restricted_csp_and_escaped_author(tmp_path):
+    c,_=client(tmp_path)
+    response=c.get('/api/report.html',params={'author':'<script>alert(1)</script>'})
+    assert response.status_code==200
+    assert 'text/html' in response.headers['content-type']
+    assert '<script>' not in response.text
+    assert "default-src 'none'" in response.headers['content-security-policy']
+
+
+def test_quality_preview_does_not_register_person(tmp_path):
+    c,_=client(tmp_path)
+    response=c.post('/api/quality',files={'files':('preview.png',picture((130,0,0)),'image/png')})
+    assert response.status_code==200, response.text
+    assert response.json()['files'][0]['face_count']==1
+    assert response.json()['files'][0]['faces'][0]['quality']['issues']
+    assert c.get('/api/status').json()['people_count']==0
